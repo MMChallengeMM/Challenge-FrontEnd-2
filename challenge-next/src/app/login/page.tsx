@@ -4,6 +4,7 @@ import { routes } from "@/routes";
 import { useState } from "react";
 import Image from "next/image";
 import Head from "next/head";
+import { apiService } from "@/services/apiService";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,20 +13,46 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const handleLogin = (e: { preventDefault: () => void; }) => {
+  const handleLogin = async (e: { preventDefault: () => void; }) => {
     e.preventDefault();
     setIsLoading(true);
     setError("");
 
-    setTimeout(() => {
-      if (username === "admin" && password === "password") {
-        localStorage.setItem("auth", "true");
-        router.push(routes.dashboard);
+    try {
+      // Chamada para a API de autenticação usando Axios
+      const data = await apiService.login(username, password);
+      
+      // Armazenar token JWT e informações do usuário
+      localStorage.setItem("auth_token", data.token);
+      localStorage.setItem("user_info", JSON.stringify(data.user));
+      localStorage.setItem("auth", "true");
+      
+      router.push(routes.dashboard);
+    } catch (error: any) {
+      // Tratamento de erro do Axios
+      console.error("Erro na autenticação:", error);
+      
+      // Com Axios, os erros HTTP têm uma estrutura específica
+      if (error.response) {
+        // O servidor respondeu com um status de erro
+        const status = error.response.status;
+        if (status === 401) {
+          setError("Credenciais inválidas. Tente novamente.");
+        } else if (status === 403) {
+          setError("Conta bloqueada. Entre em contato com o administrador.");
+        } else {
+          setError(`Erro do servidor: ${error.response.data?.message || 'Tente novamente mais tarde.'}`);
+        }
+      } else if (error.request) {
+        // A requisição foi feita mas não houve resposta
+        setError("Não foi possível conectar ao servidor. Verifique sua conexão.");
       } else {
-        setError("Credenciais inválidas. Tente novamente.");
-        setIsLoading(false);
+        // Erro na configuração da requisição
+        setError("Erro ao processar a requisição. Tente novamente.");
       }
-    }, 800);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

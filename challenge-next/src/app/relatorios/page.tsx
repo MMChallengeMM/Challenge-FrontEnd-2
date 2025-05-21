@@ -7,9 +7,39 @@ import { routes } from "@/routes";
 import Head from "next/head";
 import Header from "@/components/Header/Header";
 import MobileMenu from "@/components/MobileMenu/MobileMenu";
+import axios from "axios";
+
+// Definição de tipos para uso com a API
+interface ReportData {
+  total: number;
+  pendente: number;
+  cancelada: number;
+  concluida: number;
+  mecanica: number;
+  eletrica: number;
+  software: number;
+  outro: number;
+}
+
+interface Report {
+  id?: string;
+  title: string;
+  generated: string;
+  data: ReportData;
+  notes?: string;
+  period?: {
+    startDate?: string;
+    endDate?: string;
+    startDateFormatted?: string;
+    endDateFormatted?: string;
+  };
+  userId?: string;
+}
 
 const ReportsPage: React.FC = () => {
   const router = useRouter();
+  // URL base da API (pode ser configurada através de variável de ambiente)
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
@@ -18,7 +48,7 @@ const ReportsPage: React.FC = () => {
   const [reportNotes, setReportNotes] = useState<string>("");
   const [generatingReport, setGeneratingReport] = useState<boolean>(false);
   const [showReportForm, setShowReportForm] = useState<boolean>(false);
-  const [reportsData, setReportsData] = useState({
+  const [reportsData, setReportsData] = useState<ReportData>({
     total: 0,
     pendente: 0,
     cancelada: 0,
@@ -28,12 +58,42 @@ const ReportsPage: React.FC = () => {
     software: 0,
     outro: 0,
   });
+  const [savedReports, setSavedReports] = useState<Report[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!localStorage.getItem("auth")) {
       router.push(routes.login);
+    } else {
+      // Carrega os relatórios salvos da API
+      fetchSavedReports();
     }
   }, [router]);
+
+  // Função para obter o token de autenticação
+  const getAuthToken = () => {
+    return localStorage.getItem("auth");
+  };
+
+  // Função para buscar os relatórios salvos da API
+  const fetchSavedReports = async () => {
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      const response = await axios.get(`${API_BASE_URL}/relatorios`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      setSavedReports(response.data);
+    } catch (err: any) {
+      console.error("Erro ao buscar relatórios:", err);
+      setError(err.response?.data?.message || "Erro ao carregar os relatórios");
+    }
+  };
 
   // Função para converter a data garantindo o horário local (00:00)
   const parseDate = (dateString: string) => {
@@ -41,8 +101,51 @@ const ReportsPage: React.FC = () => {
     return new Date(`${dateString}T00:00`);
   };
 
-  // Carrega as falhas do localStorage e aplica os filtros de data, se definidos.
-  useEffect(() => {
+  // Carrega as estatísticas de falhas da API com base nos filtros selecionados
+  const fetchReportsData = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const token = getAuthToken();
+      if (!token) return;
+
+      // Constrói a URL com parâmetros de consulta para filtragem por data
+      let url = `${API_BASE_URL}/relatorios/statistics`;
+      const params = new URLSearchParams();
+      
+      if (startDate) {
+        params.append("startDate", startDate);
+      }
+      
+      if (endDate) {
+        params.append("endDate", endDate);
+      }
+      
+      if (params.toString()) {
+        url += `?${params.toString()}`;
+      }
+      
+      const response = await axios.get(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      
+      setReportsData(response.data);
+    } catch (err: any) {
+      console.error("Erro ao buscar estatísticas:", err);
+      setError(err.response?.data?.message || "Erro ao carregar os dados");
+      
+      // Em caso de erro, tenta carregar do localStorage como fallback
+      fallbackToLocalStorage();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Função de fallback para carregar dados do localStorage se a API falhar
+  const fallbackToLocalStorage = () => {
     if (typeof window !== "undefined") {
       const storedFalhas = localStorage.getItem("falhas");
       if (storedFalhas) {
@@ -101,6 +204,11 @@ const ReportsPage: React.FC = () => {
         });
       }
     }
+  };
+
+  // Aciona a busca de dados quando as datas de filtro mudam
+  useEffect(() => {
+    fetchReportsData();
   }, [startDate, endDate]);
 
   const clearFilters = () => {
@@ -134,10 +242,17 @@ const ReportsPage: React.FC = () => {
     setShowReportForm(true);
   };
 
-  const generateReport = () => {
+  const generateReport = async () => {
     setGeneratingReport(true);
 
-    setTimeout(() => {
+    try {
+      const token = getAuthToken();
+      if (!token) {
+        alert("Você precisa estar autenticado para gerar relatórios");
+        setGeneratingReport(false);
+        return;
+      }
+
       const finalTitle =
         reportTitle ||
         (reportType === "general"
@@ -162,19 +277,140 @@ const ReportsPage: React.FC = () => {
             : null,
       };
 
-      console.log("Relatório gerado:", reportData);
+      // Envia o relatório para a API
+      const response = await axios.post(`${API_BASE_URL}/relatorios`, reportData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
 
-      const savedReports = JSON.parse(
-        localStorage.getItem("savedReports") || "[]"
-      );
-      savedReports.push(reportData);
-      localStorage.setItem("savedReports", JSON.stringify(savedReports));
+      console.log("Relatório gerado:", response.data);
+      
+      // Atualiza a lista de relatórios salvos
+      await fetchSavedReports();
 
       alert(`Relatório "${finalTitle}" gerado com sucesso!`);
+      
+      // Também salva no localStorage como backup
+      const savedReportsLocal = JSON.parse(
+        localStorage.getItem("savedReports") || "[]"
+      );
+      savedReportsLocal.push(reportData);
+      localStorage.setItem("savedReports", JSON.stringify(savedReportsLocal));
+      
+    } catch (err: any) {
+      console.error("Erro ao gerar relatório:", err);
+      alert(`Erro ao gerar relatório: ${err.response?.data?.message || "Erro desconhecido"}`);
+      
+      // Em caso de erro na API, salva apenas no localStorage
+      const savedReportsLocal = JSON.parse(
+        localStorage.getItem("savedReports") || "[]"
+      );
+      
+      const reportData = {
+        title: reportTitle,
+        generated: new Date().toISOString(),
+        data: reportsData,
+        notes: reportNotes,
+        period:
+          reportType === "period"
+            ? {
+                startDate,
+                endDate,
+                startDateFormatted: formatDateBR(startDate),
+                endDateFormatted: formatDateBR(endDate),
+              }
+            : null,
+      };
+      
+      savedReportsLocal.push(reportData);
+      localStorage.setItem("savedReports", JSON.stringify(savedReportsLocal));
+      
+    } finally {
       setGeneratingReport(false);
       setShowReportForm(false);
       setReportNotes("");
-    }, 1500);
+    }
+  };
+
+  // Renderização condicional para exibir os relatórios salvos
+  const renderSavedReports = () => {
+    // Primeiro tenta usar os relatórios da API
+    if (savedReports.length > 0) {
+      return (
+        <ul className="divide-y">
+          {savedReports.map((report: any, index: number) => (
+            <li key={index} className="py-2">
+              <div className="flex justify-between">
+                <span className="font-medium">{report.title}</span>
+                <span className="text-sm text-gray-500">
+                  {formatDateBR(report.generated)}
+                </span>
+              </div>
+              <div className="text-sm text-gray-600">
+                {report.period
+                  ? `Período: ${
+                      report.period.startDateFormatted || "Início"
+                    } até ${
+                      report.period.endDateFormatted || "Agora"
+                    }`
+                  : "Relatório Geral"}
+              </div>
+              {report.notes && (
+                <div className="text-sm text-gray-600 mt-1 italic">
+                  {report.notes.length > 100
+                    ? report.notes.substring(0, 100) + "..."
+                    : report.notes}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    
+    // Fallback para o localStorage
+    if (typeof window !== "undefined" &&
+      localStorage.getItem("savedReports") &&
+      JSON.parse(localStorage.getItem("savedReports") || "[]").length > 0) {
+      
+      return (
+        <ul className="divide-y">
+          {JSON.parse(localStorage.getItem("savedReports") || "[]").map(
+            (report: any, index: number) => (
+              <li key={index} className="py-2">
+                <div className="flex justify-between">
+                  <span className="font-medium">{report.title}</span>
+                  <span className="text-sm text-gray-500">
+                    {formatDateBR(report.generated)}
+                  </span>
+                </div>
+                <div className="text-sm text-gray-600">
+                  {report.period
+                    ? `Período: ${
+                        report.period.startDateFormatted || "Início"
+                      } até ${
+                        report.period.endDateFormatted || "Agora"
+                      }`
+                    : "Relatório Geral"}
+                </div>
+                {report.notes && (
+                  <div className="text-sm text-gray-600 mt-1 italic">
+                    {report.notes.length > 100
+                      ? report.notes.substring(0, 100) + "..."
+                      : report.notes}
+                  </div>
+                )}
+              </li>
+            )
+          )}
+        </ul>
+      );
+    }
+    
+    // Se não há relatórios em nenhum lugar
+    return <p className="text-gray-500 italic">Nenhum relatório salvo</p>;
   };
 
   return (
@@ -200,6 +436,13 @@ const ReportsPage: React.FC = () => {
         }}
       />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+        {error && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+            <strong className="font-bold">Erro: </strong>
+            <span>{error}</span>
+          </div>
+        )}
+        
         <div className="bg-marmota-surface rounded-xl shadow-md p-4 mb-6">
           <div className="flex flex-col space-y-4">
             <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
@@ -392,95 +635,84 @@ const ReportsPage: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="bg-white p-4 rounded-lg shadow-md">
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              Resumo Geral
-            </h3>
-            <p className="text-gray-800">
-              Total de Falhas: <strong>{reportsData.total}</strong>
-            </p>
+        {loading ? (
+          <div className="flex justify-center items-center py-8">
+            <svg
+              className="animate-spin h-10 w-10 text-marmota-primary"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              ></circle>
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              ></path>
+            </svg>
           </div>
-          <div className="bg-white p-4 rounded-lg shadow-md">
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              Por Status
-            </h3>
-            <ul className="text-gray-800">
-              <li>
-                Pendente: <strong>{reportsData.pendente}</strong>
-              </li>
-              <li>
-                Cancelada: <strong>{reportsData.cancelada}</strong>
-              </li>
-              <li>
-                Concluída: <strong>{reportsData.concluida}</strong>
-              </li>
-            </ul>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-md">
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              Por Tipo
-            </h3>
-            <ul className="text-gray-800">
-              <li>
-                Mecânica: <strong>{reportsData.mecanica}</strong>
-              </li>
-              <li>
-                Elétrica: <strong>{reportsData.eletrica}</strong>
-              </li>
-              <li>
-                Software: <strong>{reportsData.software}</strong>
-              </li>
-              <li>
-                Outro: <strong>{reportsData.outro}</strong>
-              </li>
-            </ul>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-md">
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              Relatórios Salvos
-            </h3>
-            <div className="text-gray-800 max-h-48 overflow-y-auto">
-              {typeof window !== "undefined" &&
-              localStorage.getItem("savedReports") &&
-              JSON.parse(localStorage.getItem("savedReports") || "[]").length >
-                0 ? (
-                <ul className="divide-y">
-                  {JSON.parse(localStorage.getItem("savedReports") || "[]").map(
-                    (report: any, index: number) => (
-                      <li key={index} className="py-2">
-                        <div className="flex justify-between">
-                          <span className="font-medium">{report.title}</span>
-                          <span className="text-sm text-gray-500">
-                            {formatDateBR(report.generated)}
-                          </span>
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          {report.period
-                            ? `Período: ${
-                                report.period.startDateFormatted || "Início"
-                              } até ${
-                                report.period.endDateFormatted || "Agora"
-                              }`
-                            : "Relatório Geral"}
-                        </div>
-                        {report.notes && (
-                          <div className="text-sm text-gray-600 mt-1 italic">
-                            {report.notes.length > 100
-                              ? report.notes.substring(0, 100) + "..."
-                              : report.notes}
-                          </div>
-                        )}
-                      </li>
-                    )
-                  )}
-                </ul>
-              ) : (
-                <p className="text-gray-500 italic">Nenhum relatório salvo</p>
-              )}
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="bg-white p-4 rounded-lg shadow-md">
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Resumo Geral
+              </h3>
+              <p className="text-gray-800">
+                Total de Falhas: <strong>{reportsData.total}</strong>
+              </p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-md">
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Por Status
+              </h3>
+              <ul className="text-gray-800">
+                <li>
+                  Pendente: <strong>{reportsData.pendente}</strong>
+                </li>
+                <li>
+                  Cancelada: <strong>{reportsData.cancelada}</strong>
+                </li>
+                <li>
+                  Concluída: <strong>{reportsData.concluida}</strong>
+                </li>
+              </ul>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-md">
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Por Tipo
+              </h3>
+              <ul className="text-gray-800">
+                <li>
+                  Mecânica: <strong>{reportsData.mecanica}</strong>
+                </li>
+                <li>
+                  Elétrica: <strong>{reportsData.eletrica}</strong>
+                </li>
+                <li>
+                  Software: <strong>{reportsData.software}</strong>
+                </li>
+                <li>
+                  Outro: <strong>{reportsData.outro}</strong>
+                </li>
+              </ul>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow-md">
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Relatórios Salvos
+              </h3>
+              <div className="text-gray-800 max-h-48 overflow-y-auto">
+                {renderSavedReports()}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       <footer className="mt-8 py-4 text-center text-sm text-marmota-gray">
