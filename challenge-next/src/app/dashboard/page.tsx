@@ -7,6 +7,27 @@ import { routes } from "@/routes";
 import Head from "next/head";
 import Header from "@/components/Header/Header";
 import MobileMenu from "@/components/MobileMenu/MobileMenu";
+import axios from 'axios';
+
+// URL base da API
+const API_BASE_URL = "http://localhost:8080/api"; // Ajuste conforme a configuração do servidor Java
+
+// Interface para tipagem das falhas
+interface Falha {
+  id: string | number;
+  tipo: string;
+  descricao: string;
+  data: string;
+  hora: string;
+  status: string;
+  timestamp?: number;
+}
+
+// Interface para criar uma nova falha
+interface NovaFalha {
+  tipo: string;
+  descricao: string;
+}
 
 const DashboardPage: React.FC = () => {
   const router = useRouter();
@@ -16,10 +37,12 @@ const DashboardPage: React.FC = () => {
   const [description, setDescription] = useState<string>("");
   const [tipoFalha, setTipoFalha] = useState<string>("Mecânica");
   const [falhas, setFalhas] = useState<Falha[]>([]);
-  const [filteredFalhas, setFilteredFalhas] = useState<any[]>([]);
+  const [filteredFalhas, setFilteredFalhas] = useState<Falha[]>([]);
   const [appliedFilter, setAppliedFilter] = useState<boolean>(false);
   const [tipoFiltro, setTipoFiltro] = useState<string>("Todos");
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Estados para o modal de detalhes com atualização de status
   const [selectedFalha, setSelectedFalha] = useState<Falha | null>(null);
@@ -27,96 +50,151 @@ const DashboardPage: React.FC = () => {
   const [modalStatus, setModalStatus] = useState<string>("Pendente");
 
   useEffect(() => {
-    if (!localStorage.getItem("auth")) {
+    // Verificar autenticação
+    const token = localStorage.getItem("auth");
+    if (!token) {
       router.push(routes.login);
+      return;
     }
+
+    // Configurar interceptor para incluir token em todas as requisições
+    axios.interceptors.request.use(
+      (config) => {
+        config.headers.Authorization = `Bearer ${token}`;
+        return config;
+      },
+      (error) => {
+        return Promise.reject(error);
+      }
+    );
+
+    // Carregar falhas da API
+    carregarFalhas();
   }, [router]);
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const falhasSalvas = localStorage.getItem("falhas");
-      if (falhasSalvas) {
-        const parsedFalhas = JSON.parse(falhasSalvas);
-        setFalhas(parsedFalhas);
-        setFilteredFalhas(parsedFalhas);
+  // Função para carregar todas as falhas da API
+  const carregarFalhas = async () => {
+    try {
+      setLoading(true);
+      const response = await axios.get(`${API_BASE_URL}/falhas`);
+      
+      // Processar os dados recebidos para o formato esperado pela UI
+      const falhasProcessadas = response.data.map((falha: any) => {
+        // Convertendo a data para o formato esperado
+        const dataObj = new Date(falha.dataCriacao);
+        return {
+          id: falha.id,
+          tipo: falha.tipo,
+          descricao: falha.descricao,
+          data: dataObj.toLocaleDateString('pt-BR'),
+          hora: dataObj.toLocaleTimeString('pt-BR'),
+          status: falha.status || "Pendente",
+          timestamp: dataObj.getTime()
+        };
+      });
+      
+      setFalhas(falhasProcessadas);
+      setFilteredFalhas(falhasProcessadas);
+      setLoading(false);
+    } catch (err: any) {
+      setError("Erro ao carregar as falhas: " + (err.response?.data?.message || err.message));
+      setLoading(false);
+      // Se for erro de autenticação, redirecionar para login
+      if (err.response?.status === 401) {
+        localStorage.removeItem("auth");
+        router.push(routes.login);
       }
     }
-  }, []);
+  };
 
-  const adicionarFalha = () => {
+  // Função para adicionar uma nova falha via API
+  const adicionarFalha = async () => {
     if (!description.trim()) {
       alert("Por favor, adicione uma descrição para a falha");
       return;
     }
 
-    const dataAtual = new Date();
-    const dataFormatada = dataAtual.toLocaleDateString("pt-BR");
-    const horaFormatada = dataAtual.toLocaleTimeString("pt-BR");
+    try {
+      const novaFalha: NovaFalha = {
+        tipo: tipoFalha,
+        descricao: description
+      };
 
-    // Gera automaticamente um ID usando Date.now()
-    const novaFalha = {
-      id: Date.now(),
-      tipo: tipoFalha,
-      descricao: description,
-      data: dataFormatada,
-      hora: horaFormatada,
-      timestamp: dataAtual.getTime(),
-      status: "Pendente",
-    };
+      const response = await axios.post(`${API_BASE_URL}/falhas`, novaFalha);
+      
+      // Processar a resposta para o formato esperado na UI
+      const dataObj = new Date(response.data.dataCriacao);
+      const falhaAdicionada: Falha = {
+        id: response.data.id,
+        tipo: response.data.tipo,
+        descricao: response.data.descricao,
+        data: dataObj.toLocaleDateString('pt-BR'),
+        hora: dataObj.toLocaleTimeString('pt-BR'),
+        status: response.data.status || "Pendente",
+        timestamp: dataObj.getTime()
+      };
 
-    const novasFalhas = [novaFalha, ...falhas];
-    setFalhas(novasFalhas);
+      // Atualizar estado local
+      const novasFalhas = [falhaAdicionada, ...falhas];
+      setFalhas(novasFalhas);
 
-    if (!appliedFilter) {
-      setFilteredFalhas(novasFalhas);
-    } else {
-      aplicarFiltro(novasFalhas);
-    }
+      if (!appliedFilter) {
+        setFilteredFalhas(novasFalhas);
+      } else {
+        aplicarFiltro(novasFalhas);
+      }
 
-    localStorage.setItem("falhas", JSON.stringify(novasFalhas));
-    setDescription("");
-
-    if (window.innerWidth < 768) {
-      setShowAddModal(false);
+      setDescription("");
+      
+      if (window.innerWidth < 768) {
+        setShowAddModal(false);
+      }
+    } catch (err: any) {
+      alert("Erro ao adicionar falha: " + (err.response?.data?.message || err.message));
+      if (err.response?.status === 401) {
+        localStorage.removeItem("auth");
+        router.push(routes.login);
+      }
     }
   };
 
-  const filtrarFalhas = (falhasParaFiltrar?: any[], tipoParam?: string) => {
+  // Função para filtrar falhas
+  const filtrarFalhas = (falhasParaFiltrar?: Falha[], tipoParam?: string) => {
     const falhasToFilter = falhasParaFiltrar || falhas;
     const tipoToUse = tipoParam !== undefined ? tipoParam : tipoFiltro;
 
     let resultado = [...falhasToFilter];
 
     if (tipoToUse !== "Todos") {
-        resultado = resultado.filter((falha) => falha.tipo === tipoToUse);
+      resultado = resultado.filter((falha) => falha.tipo === tipoToUse);
     }
 
     if (!startDate && !endDate) {
-        return resultado;
+      return resultado;
     }
 
     return resultado.filter((falha) => {
-        const falhaDate = new Date(falha.timestamp);
+      const falhaDate = new Date(falha.timestamp || 0);
 
-        // Criar datas garantindo que não haja deslocamento de fuso horário
-        const dataInicio = startDate ? new Date(`${startDate}T00:00:00.000Z`) : null;
-        const dataFim = endDate ? new Date(`${endDate}T23:59:59.999Z`) : null;
+      // Criar datas garantindo que não haja deslocamento de fuso horário
+      const dataInicio = startDate ? new Date(`${startDate}T00:00:00.000Z`) : null;
+      const dataFim = endDate ? new Date(`${endDate}T23:59:59.999Z`) : null;
 
-        if (dataInicio) dataInicio.setMinutes(dataInicio.getMinutes() + dataInicio.getTimezoneOffset());
-        if (dataFim) dataFim.setMinutes(dataFim.getMinutes() + dataFim.getTimezoneOffset());
+      if (dataInicio) dataInicio.setMinutes(dataInicio.getMinutes() + dataInicio.getTimezoneOffset());
+      if (dataFim) dataFim.setMinutes(dataFim.getMinutes() + dataFim.getTimezoneOffset());
 
-        if (dataInicio && dataFim) {
-            return falhaDate >= dataInicio && falhaDate <= dataFim;
-        } else if (dataInicio) {
-            return falhaDate >= dataInicio;
-        } else if (dataFim) {
-            return falhaDate <= dataFim;
-        }
-        return true;
+      if (dataInicio && dataFim) {
+        return falhaDate >= dataInicio && falhaDate <= dataFim;
+      } else if (dataInicio) {
+        return falhaDate >= dataInicio;
+      } else if (dataFim) {
+        return falhaDate <= dataFim;
+      }
+      return true;
     });
-};
+  };
 
-const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
+  const aplicarFiltro = (falhasParaFiltrar?: Falha[]) => {
     const falhasFiltradas = filtrarFalhas(falhasParaFiltrar);
     setFilteredFalhas(falhasFiltradas);
 
@@ -149,49 +227,57 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
         return "bg-yellow-100 text-yellow-800";
       case "Estrutural":
         return "bg-green-100 text-green-800";
+      case "Software":
+        return "bg-purple-100 text-purple-800";
       default:
         return "bg-gray-100 text-gray-800";
     }
   };
 
-    // Abre o modal de detalhes, definindo a falha selecionada e seu status atual
-    const openDetailsModal = (falha: any) => {
-        setSelectedFalha(falha);
-        setModalStatus(falha.status || "Pendente");
-        setShowDetailsModal(true);
-      };
-      interface Falha {
-        id: string | number;
-        status: string; 
-        tipo: string; 
-        descricao: string; 
-        data: string; 
-        hora: string; 
-      }
-      
-      // Atualiza o status da falha e persiste a alteração
-      const updateFalhaStatus = () => {
-        if (selectedFalha) {
-          const updatedFalha = { ...selectedFalha, status: modalStatus };
-          const updatedFalhas = falhas.map((f) =>  
-            f.id === selectedFalha.id ? updatedFalha : f
-          );
-          setFalhas(updatedFalhas);
-          aplicarFiltro(updatedFalhas);
-          localStorage.setItem("falhas", JSON.stringify(updatedFalhas));
-          setSelectedFalha(updatedFalha);
-        }
-      };
+  // Abre o modal de detalhes, definindo a falha selecionada e seu status atual
+  const openDetailsModal = (falha: Falha) => {
+    setSelectedFalha(falha);
+    setModalStatus(falha.status || "Pendente");
+    setShowDetailsModal(true);
+  };
 
-      // Função para formatar data para exibição
+  // Atualiza o status da falha via API
+  const updateFalhaStatus = async () => {
+    if (selectedFalha) {
+      try {
+        // Chamar a API para atualizar o status
+        await axios.put(`${API_BASE_URL}/falhas/${selectedFalha.id}/status`, {
+          status: modalStatus
+        });
+
+        // Atualizar localmente após confirmação da API
+        const updatedFalha = { ...selectedFalha, status: modalStatus };
+        const updatedFalhas = falhas.map((f) =>
+          f.id === selectedFalha.id ? updatedFalha : f
+        );
+        
+        setFalhas(updatedFalhas);
+        aplicarFiltro(updatedFalhas);
+        setSelectedFalha(updatedFalha);
+      } catch (err: any) {
+        alert("Erro ao atualizar status: " + (err.response?.data?.message || err.message));
+        if (err.response?.status === 401) {
+          localStorage.removeItem("auth");
+          router.push(routes.login);
+        }
+      }
+    }
+  };
+
+  // Função para formatar data para exibição
   const formatDateForDisplay = (dateString: string) => {
     if (!dateString) return "";
-    
+
     // Criar uma nova data com o fuso horário local
     const date = new Date(dateString);
-    
+
     // Formatar para DD/MM/YYYY (formato brasileiro)
-    return date.toLocaleDateString('pt-BR');
+    return date.toLocaleDateString("pt-BR");
   };
 
   return (
@@ -206,13 +292,17 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
       </Head>
 
       {/* Header */}
-      <Header/>
+      <Header />
       {/* Mobile Navigation */}
-      <MobileMenu menuOpen={false} setMenuOpen={function (): void {
-        throw new Error("Function not implemented.");
-      } } handleLogout={function (): void {
-        throw new Error("Function not implemented.");
-      } }/>
+      <MobileMenu
+        menuOpen={false}
+        setMenuOpen={function (): void {
+          throw new Error("Function not implemented.");
+        }}
+        handleLogout={function (): void {
+          throw new Error("Function not implemented.");
+        }}
+      />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex flex-col md:flex-row mt-4">
@@ -312,7 +402,7 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                 <div className="flex gap-2">
                   <button
                     onClick={() => aplicarFiltro()}
-                    className=" cursor-pointer flex-1 bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow transform hover:translate-y-px"
+                    className="cursor-pointer flex-1 bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow transform hover:translate-y-px"
                   >
                     Filtrar
                   </button>
@@ -390,8 +480,7 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                 </div>
                 <button
                   onClick={adicionarFalha}
-                  className="cursor-pointer
-                  w-full bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow transform hover:translate-y-px"
+                  className="cursor-pointer w-full bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow transform hover:translate-y-px"
                 >
                   Adicionar
                 </button>
@@ -409,8 +498,7 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                 {appliedFilter && (
                   <button
                     onClick={limparFiltros}
-                    className="text-xs text-marmota-primary flex items-center cursor-pointer
-                    "
+                    className="text-xs text-marmota-primary flex items-center cursor-pointer"
                   >
                     Limpar
                     <svg
@@ -488,8 +576,7 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
               <div className="mt-2">
                 <button
                   onClick={() => aplicarFiltro()}
-                  className="w-full bg-gradient-to-r cursor-pointer
-                  from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-xs font-medium py-2 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow"
+                  className="w-full bg-gradient-to-r cursor-pointer from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-xs font-medium py-2 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow"
                 >
                   Aplicar Filtros
                 </button>
@@ -549,105 +636,79 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                 </div>
               </div>
 
-              {filteredFalhas.length === 0 ? (
-                <div className="text-marmota-gray text-sm bg-white p-6 rounded-lg text-center">
-                  Não há falhas registradas
-                  {appliedFilter ? " com os filtros aplicados" : ""}.
-                  {!appliedFilter && "Adicione uma falha para começar."}
+              {/* Estado de carregamento */}
+              {loading && (
+                <div className="text-center py-8">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-marmota-primary"></div>
+                  <p className="mt-2 text-marmota-gray">Carregando falhas...</p>
+                </div>
+              )}
+
+              {/* Estado de erro */}
+              {error && !loading && (
+                <div className="text-center py-8 bg-red-50 rounded-lg">
+                  <div className="text-red-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="font-medium mt-2">{error}</p>
+                    <button 
+                      onClick={carregarFalhas} 
+                      className="mt-3 bg-red-100 text-red-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-red-200 transition-colors"
+                    >
+                      Tentar novamente
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Estado sem resultados */}
+              {!loading && !error && filteredFalhas.length === 0 && (
+                <div className="text-center py-8 bg-gray-50 rounded-lg">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="mt-4 text-gray-500 font-medium">Nenhuma falha encontrada</p>
                   {appliedFilter && (
-                    <div className="mt-2">
-                      <button
-                        onClick={limparFiltros}
-                        className="text-marmota-primary font-medium hover:underline cursor-pointer
-                        "
-                      >
-                        Limpar filtros
-                      </button>
-                    </div>
+                    <button 
+                      onClick={limparFiltros} 
+                      className="mt-3 bg-gray-200 text-gray-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-gray-300 transition-colors"
+                    >
+                      Limpar filtros
+                    </button>
                   )}
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  {/* Desktop: Listagem com colunas para ID, Tipo, Descrição (somente botão), Data e Hora */}
-                  <div className="hidden md:block">
-                    <div className="grid grid-cols-5 gap-4 mb-2 font-medium text-sm text-marmota-gray px-2">
-                      <div>ID</div>
-                      <div>Tipo</div>
-                      <div>Descrição</div>
-                      <div>Data</div>
-                      <div>Hora</div>
-                    </div>
-                    <div className="space-y-4">
-                      {filteredFalhas.map((falha) => (
-                        <div
-                          key={falha.id}
-                          className="grid grid-cols-5 gap-4 bg-white p-4 rounded-lg shadow-sm transition-all hover:shadow-md text-sm"
-                        >
-                          <div className="text-marmota-gray text-xs">
-                            {falha.id}
-                          </div>
-                          <div className="font-medium text-marmota-primary">
-                            <span
-                              className={`inline-block px-3 py-1 rounded-full ${getTipoClass(
-                                falha.tipo
-                              )}`}
-                            >
-                              {falha.tipo}
-                            </span>
-                          </div>
-                          <div className="text-marmota-dark">
-                            <button
-                              onClick={() => openDetailsModal(falha)}
-                              className="text-marmota-primary text-xs underline cursor-pointer
-                              "
-                            >
-                              Mostrar mais
-                            </button>
-                          </div>
-                          <div className="text-marmota-gray text-xs">
-                            {falha.data}
-                          </div>
-                          <div className="text-marmota-gray text-xs">
-                            {falha.hora}
-                          </div>
+              )}
+
+              {/* Lista de falhas */}
+              {!loading && !error && filteredFalhas.length > 0 && (
+                <div className="space-y-4">
+                  {filteredFalhas.map((falha) => (
+                    <div
+                      key={falha.id}
+                      onClick={() => openDetailsModal(falha)}
+                      className="bg-white rounded-lg shadow-sm p-4 transition-all hover:shadow-md cursor-pointer"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="flex items-center">
+                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${getTipoClass(falha.tipo)}`}>{falha.tipo}</span>
+                          <span className="ml-3 text-xs text-marmota-gray">{falha.data} • {falha.hora}</span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                  {/* Mobile: Cada falha em card, exibindo ID, Tipo e botão "Mostrar mais" */}
-                  <div className="md:hidden space-y-4">
-                    {filteredFalhas.map((falha) => (
-                      <div
-                        key={falha.id}
-                        className="bg-white p-4 rounded-lg shadow-sm transition-all hover:shadow-md text-sm"
-                      >
-                        <div className="flex justify-between items-center mb-2">
-                          <div className="text-xs text-marmota-gray">
-                            ID: {falha.id}
-                          </div>
-                          <span
-                            className={`inline-block px-3 py-1 rounded-full ${getTipoClass(
-                              falha.tipo
-                            )}`}
-                          >
-                            {falha.tipo}
+                        <div>
+                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                            falha.status === "Resolvido" 
+                              ? "bg-green-100 text-green-800" 
+                              : falha.status === "Em Andamento" 
+                                ? "bg-yellow-100 text-yellow-800" 
+                                : "bg-gray-100 text-gray-800"
+                          }`}>
+                            {falha.status}
                           </span>
                         </div>
-                        <div className="text-marmota-dark">
-                          <button
-                            onClick={() => openDetailsModal(falha)}
-                            className="text-marmota-primary text-xs underline pointer"
-                          >
-                            Mostrar mais
-                          </button>
-                        </div>
-                        <div className="text-xs text-marmota-gray mt-2 flex justify-between">
-                          <span>{falha.data}</span>
-                          <span>{falha.hora}</span>
-                        </div>
                       </div>
-                    ))}
-                  </div>
+                      <p className="mt-2 text-marmota-dark line-clamp-2">{falha.descricao}</p>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -655,39 +716,44 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
         </div>
       </div>
 
-      {/* Botão de adicionar (Mobile) */}
-      <button
-        onClick={() => setShowAddModal(true)}
-        className="md:hidden fixed z-10 bottom-4 right-4 bg-gradient-to-r from-marmota-primary to-marmota-secondary text-white p-3 rounded-full shadow-lg"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          className="h-6 w-6"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
+      {/* Floating Action Button (Mobile) */}
+      <div className="md:hidden fixed right-6 bottom-6">
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-r from-marmota-primary to-marmota-secondary text-white shadow-lg"
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M12 4v16m8-8H4"
-          />
-        </svg>
-      </button>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            className="h-6 w-6"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 4v16m8-8H4"
+            />
+          </svg>
+        </button>
+      </div>
 
       {/* Modal para adicionar falha (Mobile) */}
       {showAddModal && (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-opacity-50 backdrop-blur-md">
-          <div className="bg-white rounded-lg p-6 w-11/12 max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="font-display font-medium text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+              <h3 className="font-display font-semibold text-marmota-dark text-lg">
                 Adicionar Falha
-              </h4>
-              <button onClick={() => setShowAddModal(false)}>
+              </h3>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="text-marmota-gray hover:text-marmota-dark"
+              >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6 text-gray-700"
+                  className="h-6 w-6"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -701,13 +767,13 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                 </svg>
               </button>
             </div>
-            <div className="space-y-3">
-              <div className="bg-white rounded-lg p-3 shadow-sm transition-all hover:shadow-md">
-                <label className="text-sm font-medium mb-1.5 block text-gray-700">
+            <div className="p-5 space-y-4">
+              <div className="bg-marmota-light rounded-lg p-3">
+                <label className="text-sm font-medium mb-1.5 block text-marmota-gray">
                   Tipo:
                 </label>
                 <select
-                  className="w-full bg-white text-sm p-1.5 outline-none border border-gray-200 rounded-md text-gray-800 font-medium"
+                  className="w-full bg-white text-sm p-2 outline-none border border-gray-200 rounded-md text-marmota-dark font-medium"
                   value={tipoFalha}
                   onChange={(e) => setTipoFalha(e.target.value)}
                 >
@@ -717,12 +783,12 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                   <option>Outro</option>
                 </select>
               </div>
-              <div className="bg-white rounded-lg p-3 shadow-sm transition-all hover:shadow-md">
-                <label className="text-sm font-medium mb-1.5 block text-gray-700">
+              <div className="bg-marmota-light rounded-lg p-3">
+                <label className="text-sm font-medium mb-1.5 block text-marmota-gray">
                   Descrição:
                 </label>
                 <textarea
-                  className="w-full h-24 bg-white text-sm outline-none resize-none text-gray-800 border border-gray-200 rounded-md p-2 font-medium"
+                  className="w-full h-32 bg-white text-sm outline-none resize-none text-marmota-dark border border-gray-200 rounded-md p-2 font-medium"
                   placeholder="Insira a descrição..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -730,7 +796,7 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
               </div>
               <button
                 onClick={adicionarFalha}
-                className="w-full bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-2.5 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow transform hover:translate-y-px"
+                className="w-full bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-3 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow"
               >
                 Adicionar
               </button>
@@ -739,24 +805,26 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
         </div>
       )}
 
-      {/* Modal de detalhes da falha (Desktop e Mobile) */}
+      {/* Modal de Detalhes da Falha */}
       {showDetailsModal && selectedFalha && (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-opacity-50 backdrop-blur-md">
-          <div className="bg-white rounded-lg p-6 w-11/12 max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="font-display font-medium text-gray-900">
-                Detalhes da Falha
-              </h4>
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-center">
+              <div className="flex items-center">
+                <span className={`text-xs px-2 py-1 rounded-full font-medium ${getTipoClass(selectedFalha.tipo)}`}>
+                  {selectedFalha.tipo}
+                </span>
+                <h3 className="font-display font-semibold text-marmota-dark text-lg ml-3">
+                  Detalhes da Falha
+                </h3>
+              </div>
               <button
-                onClick={() => {
-                  setShowDetailsModal(false);
-                  setSelectedFalha(null);
-                }}
-                className="cursor-pointer"
+                onClick={() => setShowDetailsModal(false)}
+                className="text-marmota-gray hover:text-marmota-dark"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6 text-gray-700"
+                  className="h-6 w-6"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
@@ -770,58 +838,49 @@ const aplicarFiltro = (falhasParaFiltrar?: any[]) => {
                 </svg>
               </button>
             </div>
-            <div className="space-y-3 text-sm text-gray-800">
-              <div>
-                <strong>ID:</strong> {selectedFalha.id}
+            <div className="p-5 space-y-4">
+              <div className="flex justify-between items-center text-sm text-marmota-gray">
+                <div>ID: #{selectedFalha.id}</div>
+                <div>{selectedFalha.data} • {selectedFalha.hora}</div>
               </div>
-              <div>
-                <strong>Tipo:</strong> {selectedFalha.tipo}
+              
+              <div className="bg-marmota-light rounded-lg p-4">
+                <p className="text-marmota-dark whitespace-pre-wrap">{selectedFalha.descricao}</p>
               </div>
-              <div>
-                <strong>Descrição:</strong> {selectedFalha.descricao}
-              </div>
-              <div>
-                <strong>Data:</strong> {selectedFalha.data}
-              </div>
-              <div>
-                <strong>Hora:</strong> {selectedFalha.hora}
-              </div>
-              <div className="mt-3">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+              
+              <div className="bg-marmota-light rounded-lg p-4">
+                <label className="text-sm font-medium mb-2 block text-marmota-gray">
                   Status:
                 </label>
                 <select
+                  className="w-full bg-white text-sm p-2 outline-none border border-gray-200 rounded-md text-marmota-dark font-medium"
                   value={modalStatus}
                   onChange={(e) => setModalStatus(e.target.value)}
-                  className="w-full bg-white text-sm p-1.5 border border-gray-200 rounded-md text-gray-800"
                 >
                   <option value="Pendente">Pendente</option>
-                  <option value="Cancelada">Cancelada</option>
-                  <option value="Concluída">Concluída</option>
+                  <option value="Em Andamento">Em Andamento</option>
+                  <option value="Resolvido">Resolvido</option>
                 </select>
               </div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                onClick={updateFalhaStatus}
-                className="cursor-pointer bg-gradient-to-r from-marmota-primary to-marmota-secondary text-white text-sm font-medium py-2 px-4 rounded-lg"
-              >
-                Atualizar Status
-              </button>
-              <button
-                onClick={() => {
-                  setShowDetailsModal(false);
-                  setSelectedFalha(null);
-                }}
-                className="cursor-pointer bg-gray-200 text-gray-700 text-sm font-medium py-2 px-4 rounded-lg"
-              >
-                Fechar
-              </button>
+              
+              <div className="flex space-x-3">
+                <button
+                  onClick={updateFalhaStatus}
+                  className="flex-1 bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-3 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow"
+                >
+                  Atualizar Status
+                </button>
+                <button
+                  onClick={() => setShowDetailsModal(false)}
+                  className="flex-1 bg-gray-200 text-marmota-gray hover:bg-gray-300 text-sm font-medium py-3 px-4 rounded-lg transition-all duration-300"
+                >
+                  Fechar
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
-
       <footer className="mt-8 py-4 text-center text-sm text-marmota-gray">
         <div className="max-w-7xl mx-auto px-4">
           © 2025 Marmota Mobilidade. Todos os direitos reservados.
