@@ -7,7 +7,7 @@ import { routes } from "@/routes";
 import Head from "next/head";
 import Header from "@/components/Header/Header";
 import MobileMenu from "@/components/MobileMenu/MobileMenu";
-import axios from "axios";
+import { apiService } from "@/services/apiService";
 
 // Definição de tipos para uso com a API
 interface ReportData {
@@ -38,9 +38,6 @@ interface Report {
 
 const ReportsPage: React.FC = () => {
   const router = useRouter();
-  // URL base da API (pode ser configurada através de variável de ambiente)
-  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-
   const [startDate, setStartDate] = useState<string>("");
   const [endDate, setEndDate] = useState<string>("");
   const [reportType, setReportType] = useState<string>("general");
@@ -63,7 +60,8 @@ const ReportsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!localStorage.getItem("auth")) {
+    const token = localStorage.getItem("auth_token"); // Corrigido para usar auth_token
+    if (!token) {
       router.push(routes.login);
     } else {
       // Carrega os relatórios salvos da API
@@ -71,26 +69,23 @@ const ReportsPage: React.FC = () => {
     }
   }, [router]);
 
-  // Função para obter o token de autenticação
-  const getAuthToken = () => {
-    return localStorage.getItem("auth");
-  };
-
   // Função para buscar os relatórios salvos da API
   const fetchSavedReports = async () => {
     try {
-      const token = getAuthToken();
-      if (!token) return;
-
-      const response = await axios.get(`${API_BASE_URL}/relatorios`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-
-      setSavedReports(response.data);
+      // Usando o método getRelatorios do apiService
+      const reports = await apiService.getRelatorios();
+      setSavedReports(reports);
     } catch (err: any) {
       console.error("Erro ao buscar relatórios:", err);
+      
+      // Se for erro 401, redireciona para login
+      if (err.response?.status === 401) {
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("user_info");
+        router.push(routes.login);
+        return;
+      }
+      
       setError(err.response?.data?.message || "Erro ao carregar os relatórios");
     }
   };
@@ -107,34 +102,52 @@ const ReportsPage: React.FC = () => {
     setError(null);
     
     try {
-      const token = getAuthToken();
-      if (!token) return;
-
-      // Constrói a URL com parâmetros de consulta para filtragem por data
-      let url = `${API_BASE_URL}/relatorios/statistics`;
-      const params = new URLSearchParams();
+      // Constrói os parâmetros para filtragem por data
+      const params: any = {};
       
       if (startDate) {
-        params.append("startDate", startDate);
+        params.startDate = startDate;
       }
       
       if (endDate) {
-        params.append("endDate", endDate);
+        params.endDate = endDate;
       }
       
-      if (params.toString()) {
-        url += `?${params.toString()}`;
-      }
+      // Usando o método getFalhas para obter as estatísticas
+      const falhas = await apiService.getFalhas(params);
       
-      const response = await axios.get(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+      // Calculando as estatísticas localmente
+      const total = falhas.length;
+      const pendente = falhas.filter((f: any) => f.status === "Pendente").length;
+      const cancelada = falhas.filter((f: any) => f.status === "Cancelada").length;
+      const concluida = falhas.filter((f: any) => f.status === "Concluída" || f.status === "Concluida").length;
+      const mecanica = falhas.filter((f: any) => f.tipo === "Mecânica" || f.tipo === "Mecanica").length;
+      const eletrica = falhas.filter((f: any) => f.tipo === "Elétrica" || f.tipo === "Eletrica").length;
+      const software = falhas.filter((f: any) => f.tipo === "Software").length;
+      const outro = falhas.filter((f: any) => f.tipo === "Outro").length;
+
+      setReportsData({
+        total,
+        pendente,
+        cancelada,
+        concluida,
+        mecanica,
+        eletrica,
+        software,
+        outro,
       });
       
-      setReportsData(response.data);
     } catch (err: any) {
       console.error("Erro ao buscar estatísticas:", err);
+      
+      // Se for erro 401, redireciona para login
+      if (err.response?.status === 401) {
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("user_info");
+        router.push(routes.login);
+        return;
+      }
+      
       setError(err.response?.data?.message || "Erro ao carregar os dados");
       
       // Em caso de erro, tenta carregar do localStorage como fallback
@@ -246,9 +259,10 @@ const ReportsPage: React.FC = () => {
     setGeneratingReport(true);
 
     try {
-      const token = getAuthToken();
+      const token = localStorage.getItem("auth_token");
       if (!token) {
         alert("Você precisa estar autenticado para gerar relatórios");
+        router.push(routes.login);
         setGeneratingReport(false);
         return;
       }
@@ -277,15 +291,10 @@ const ReportsPage: React.FC = () => {
             : null,
       };
 
-      // Envia o relatório para a API
-      const response = await axios.post(`${API_BASE_URL}/relatorios`, reportData, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
+      // Usando o método generateRelatorio do apiService
+      const response = await apiService.generateRelatorio(reportData);
 
-      console.log("Relatório gerado:", response.data);
+      console.log("Relatório gerado:", response);
       
       // Atualiza a lista de relatórios salvos
       await fetchSavedReports();
@@ -301,6 +310,15 @@ const ReportsPage: React.FC = () => {
       
     } catch (err: any) {
       console.error("Erro ao gerar relatório:", err);
+      
+      // Se for erro 401, redireciona para login
+      if (err.response?.status === 401) {
+        localStorage.removeItem("auth_token");
+        localStorage.removeItem("user_info");
+        router.push(routes.login);
+        return;
+      }
+      
       alert(`Erro ao gerar relatório: ${err.response?.data?.message || "Erro desconhecido"}`);
       
       // Em caso de erro na API, salva apenas no localStorage
@@ -334,6 +352,12 @@ const ReportsPage: React.FC = () => {
     }
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("user_info");
+    router.push(routes.login);
+  };
+
   // Renderização condicional para exibir os relatórios salvos
   const renderSavedReports = () => {
     // Primeiro tenta usar os relatórios da API
@@ -341,7 +365,7 @@ const ReportsPage: React.FC = () => {
       return (
         <ul className="divide-y">
           {savedReports.map((report: any, index: number) => (
-            <li key={index} className="py-2">
+            <li key={report.id || index} className="py-2">
               <div className="flex justify-between">
                 <span className="font-medium">{report.title}</span>
                 <span className="text-sm text-gray-500">
@@ -431,9 +455,7 @@ const ReportsPage: React.FC = () => {
         setMenuOpen={function (open: boolean): void {
           throw new Error("Function not implemented.");
         }}
-        handleLogout={function (): void {
-          throw new Error("Function not implemented.");
-        }}
+        handleLogout={handleLogout}
       />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
         {error && (
@@ -530,7 +552,7 @@ const ReportsPage: React.FC = () => {
         </div>
 
         {showReportForm && (
-          <div className="fixed inset-0  bg-opacity-50 backdrop-blur-md flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black bg-opacity-50 backdrop-blur-md flex items-center justify-center z-50">
             <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-2xl mx-4">
               <h2 className="text-xl font-semibold text-gray-900 mb-4">
                 Criar Relatório
@@ -611,7 +633,7 @@ const ReportsPage: React.FC = () => {
                         viewBox="0 0 24 24"
                       >
                         <circle
-                          className="cursor-pointeropacity-25"
+                          className="opacity-25"
                           cx="12"
                           cy="12"
                           r="10"

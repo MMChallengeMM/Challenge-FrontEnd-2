@@ -7,10 +7,7 @@ import { routes } from "@/routes";
 import Head from "next/head";
 import Header from "@/components/Header/Header";
 import MobileMenu from "@/components/MobileMenu/MobileMenu";
-import axios from 'axios';
-
-// URL base da API
-const API_BASE_URL = "http://localhost:8080/api"; // Ajuste conforme a configuração do servidor Java
+import { apiService } from "@/services/apiService";
 
 // Interface para tipagem das falhas
 interface Falha {
@@ -49,39 +46,51 @@ const DashboardPage: React.FC = () => {
   const [showDetailsModal, setShowDetailsModal] = useState<boolean>(false);
   const [modalStatus, setModalStatus] = useState<string>("Pendente");
 
+  // Estado para controle do menu mobile
+  const [menuOpen, setMenuOpen] = useState<boolean>(false);
+
   useEffect(() => {
     // Verificar autenticação
-    const token = localStorage.getItem("auth");
+    const token = localStorage.getItem("auth_token");
     if (!token) {
       router.push(routes.login);
       return;
     }
 
-    // Configurar interceptor para incluir token em todas as requisições
-    axios.interceptors.request.use(
-      (config) => {
-        config.headers.Authorization = `Bearer ${token}`;
-        return config;
-      },
-      (error) => {
-        return Promise.reject(error);
-      }
-    );
-
     // Carregar falhas da API
     carregarFalhas();
   }, [router]);
+
+  // Função para tratar erros de autenticação
+  const handleAuthError = (error: any) => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem("auth_token");
+      localStorage.removeItem("user_info");
+      localStorage.removeItem("auth");
+      router.push(routes.login);
+    }
+  };
+
+  // Função para logout
+  const handleLogout = () => {
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("user_info");
+    localStorage.removeItem("auth");
+    router.push(routes.login);
+  };
 
   // Função para carregar todas as falhas da API
   const carregarFalhas = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${API_BASE_URL}/falhas`);
+      setError(null);
+      
+      const response = await apiService.getFalhas();
       
       // Processar os dados recebidos para o formato esperado pela UI
-      const falhasProcessadas = response.data.map((falha: any) => {
+      const falhasProcessadas = response.map((falha: any) => {
         // Convertendo a data para o formato esperado
-        const dataObj = new Date(falha.dataCriacao);
+        const dataObj = new Date(falha.dataCriacao || falha.created_at || Date.now());
         return {
           id: falha.id,
           tipo: falha.tipo,
@@ -95,15 +104,12 @@ const DashboardPage: React.FC = () => {
       
       setFalhas(falhasProcessadas);
       setFilteredFalhas(falhasProcessadas);
-      setLoading(false);
     } catch (err: any) {
-      setError("Erro ao carregar as falhas: " + (err.response?.data?.message || err.message));
+      const errorMessage = err.response?.data?.message || err.message || "Erro ao carregar as falhas";
+      setError(errorMessage);
+      handleAuthError(err);
+    } finally {
       setLoading(false);
-      // Se for erro de autenticação, redirecionar para login
-      if (err.response?.status === 401) {
-        localStorage.removeItem("auth");
-        router.push(routes.login);
-      }
     }
   };
 
@@ -120,17 +126,17 @@ const DashboardPage: React.FC = () => {
         descricao: description
       };
 
-      const response = await axios.post(`${API_BASE_URL}/falhas`, novaFalha);
+      const response = await apiService.createFalha(novaFalha);
       
       // Processar a resposta para o formato esperado na UI
-      const dataObj = new Date(response.data.dataCriacao);
+      const dataObj = new Date(response.dataCriacao || response.created_at || Date.now());
       const falhaAdicionada: Falha = {
-        id: response.data.id,
-        tipo: response.data.tipo,
-        descricao: response.data.descricao,
+        id: response.id,
+        tipo: response.tipo,
+        descricao: response.descricao,
         data: dataObj.toLocaleDateString('pt-BR'),
         hora: dataObj.toLocaleTimeString('pt-BR'),
-        status: response.data.status || "Pendente",
+        status: response.status || "Pendente",
         timestamp: dataObj.getTime()
       };
 
@@ -150,11 +156,9 @@ const DashboardPage: React.FC = () => {
         setShowAddModal(false);
       }
     } catch (err: any) {
-      alert("Erro ao adicionar falha: " + (err.response?.data?.message || err.message));
-      if (err.response?.status === 401) {
-        localStorage.removeItem("auth");
-        router.push(routes.login);
-      }
+      const errorMessage = err.response?.data?.message || err.message || "Erro ao adicionar falha";
+      alert(errorMessage);
+      handleAuthError(err);
     }
   };
 
@@ -246,7 +250,7 @@ const DashboardPage: React.FC = () => {
     if (selectedFalha) {
       try {
         // Chamar a API para atualizar o status
-        await axios.put(`${API_BASE_URL}/falhas/${selectedFalha.id}/status`, {
+        const updatedFalhaData = await apiService.updateFalha(Number(selectedFalha.id), {
           status: modalStatus
         });
 
@@ -259,12 +263,15 @@ const DashboardPage: React.FC = () => {
         setFalhas(updatedFalhas);
         aplicarFiltro(updatedFalhas);
         setSelectedFalha(updatedFalha);
+        
+        // Fechar o modal após sucesso
+        setTimeout(() => {
+          setShowDetailsModal(false);
+        }, 500);
       } catch (err: any) {
-        alert("Erro ao atualizar status: " + (err.response?.data?.message || err.message));
-        if (err.response?.status === 401) {
-          localStorage.removeItem("auth");
-          router.push(routes.login);
-        }
+        const errorMessage = err.response?.data?.message || err.message || "Erro ao atualizar status";
+        alert(errorMessage);
+        handleAuthError(err);
       }
     }
   };
@@ -283,7 +290,7 @@ const DashboardPage: React.FC = () => {
   return (
     <div className="min-h-screen bg-marmota-light font-sans">
       <Head>
-        <title>Marmota Mobilidade</title>
+        <title>Marmota Mobilidade - Dashboard</title>
         <meta name="description" content="Sistema de gestão de mobilidade" />
         <link rel="icon" href="/marmota-icon.png" sizes="any" />
         <link rel="icon" href="/marmota-icon.png" type="image/svg+xml" />
@@ -293,15 +300,12 @@ const DashboardPage: React.FC = () => {
 
       {/* Header */}
       <Header />
+      
       {/* Mobile Navigation */}
       <MobileMenu
-        menuOpen={false}
-        setMenuOpen={function (): void {
-          throw new Error("Function not implemented.");
-        }}
-        handleLogout={function (): void {
-          throw new Error("Function not implemented.");
-        }}
+        menuOpen={menuOpen}
+        setMenuOpen={setMenuOpen}
+        handleLogout={handleLogout}
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -653,239 +657,359 @@ const DashboardPage: React.FC = () => {
                     </svg>
                     <p className="font-medium mt-2">{error}</p>
                     <button 
-                      onClick={carregarFalhas} 
-                      className="mt-3 bg-red-100 text-red-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-red-200 transition-colors"
+                      onClick={carregarFalhas}
+                      className="mt-3 px-4 py-2 bg-marmota-primary text-white rounded-lg hover:bg-marmota-secondary transition-colors"
                     >
                       Tentar novamente
-                    </button>
+                      </button>
                   </div>
                 </div>
               )}
 
-              {/* Estado sem resultados */}
-              {!loading && !error && filteredFalhas.length === 0 && (
-                <div className="text-center py-8 bg-gray-50 rounded-lg">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p className="mt-4 text-gray-500 font-medium">Nenhuma falha encontrada</p>
-                  {appliedFilter && (
-                    <button 
-                      onClick={limparFiltros} 
-                      className="mt-3 bg-gray-200 text-gray-600 px-4 py-2 rounded-md text-sm font-medium hover:bg-gray-300 transition-colors"
-                    >
-                      Limpar filtros
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Lista de falhas */}
-              {!loading && !error && filteredFalhas.length > 0 && (
-                <div className="space-y-4">
-                  {filteredFalhas.map((falha) => (
-                    <div
-                      key={falha.id}
-                      onClick={() => openDetailsModal(falha)}
-                      className="bg-white rounded-lg shadow-sm p-4 transition-all hover:shadow-md cursor-pointer"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div className="flex items-center">
-                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${getTipoClass(falha.tipo)}`}>{falha.tipo}</span>
-                          <span className="ml-3 text-xs text-marmota-gray">{falha.data} • {falha.hora}</span>
-                        </div>
+              {/* Listagem de falhas */}
+              {!loading && !error && (
+                <>
+                  {filteredFalhas.length === 0 ? (
+                    <div className="text-center py-8">
+                      {appliedFilter ? (
                         <div>
-                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                            falha.status === "Resolvido" 
-                              ? "bg-green-100 text-green-800" 
-                              : falha.status === "Em Andamento" 
-                                ? "bg-yellow-100 text-yellow-800" 
-                                : "bg-gray-100 text-gray-800"
-                          }`}>
-                            {falha.status}
-                          </span>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-12 w-12 mx-auto text-marmota-gray mb-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                            />
+                          </svg>
+                          <p className="text-marmota-gray font-medium">
+                            Nenhuma falha encontrada com os filtros aplicados
+                          </p>
+                          <button
+                            onClick={limparFiltros}
+                            className="mt-3 text-marmota-primary hover:text-marmota-secondary cursor-pointer"
+                          >
+                            Limpar filtros
+                          </button>
                         </div>
-                      </div>
-                      <p className="mt-2 text-marmota-dark line-clamp-2">{falha.descricao}</p>
+                      ) : (
+                        <div>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-12 w-12 mx-auto text-marmota-gray mb-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                            />
+                          </svg>
+                          <p className="text-marmota-gray font-medium">
+                            Nenhuma falha cadastrada ainda
+                          </p>
+                          <p className="text-sm text-marmota-gray mt-2">
+                            Adicione uma nova falha usando o menu lateral
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredFalhas.map((falha) => (
+                        <div
+                          key={falha.id}
+                          className="bg-white p-4 rounded-lg shadow-sm hover:shadow-md transition-all duration-200 border border-gray-100 cursor-pointer"
+                          onClick={() => openDetailsModal(falha)}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex flex-col sm:flex-row sm:items-center mb-2">
+                                <span
+                                  className={`inline-block px-2 py-1 rounded-full text-xs font-medium mr-0 sm:mr-3 mb-2 sm:mb-0 ${getTipoClass(
+                                    falha.tipo
+                                  )}`}
+                                >
+                                  {falha.tipo}
+                                </span>
+                                <div className="flex items-center text-sm text-marmota-gray">
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    className="h-4 w-4 mr-1"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2}
+                                      d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                    />
+                                  </svg>
+                                  {falha.data} às {falha.hora}
+                                </div>
+                              </div>
+                              <p className="text-marmota-dark font-medium text-sm mb-2">
+                                {falha.descricao}
+                              </p>
+                              <div className="flex items-center">
+                                <span className="text-xs text-marmota-gray mr-2">
+                                  Status:
+                                </span>
+                                <span
+                                  className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
+                                    falha.status === "Resolvido"
+                                      ? "bg-green-100 text-green-800"
+                                      : falha.status === "Em Andamento"
+                                      ? "bg-orange-100 text-orange-800"
+                                      : "bg-red-100 text-red-800"
+                                  }`}
+                                >
+                                  {falha.status || "Pendente"}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="mt-3 sm:mt-0">
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="h-5 w-5 text-marmota-gray"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M9 5l7 7-7 7"
+                                />
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Floating Action Button (Mobile) */}
-      <div className="md:hidden fixed right-6 bottom-6">
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="flex items-center justify-center w-14 h-14 rounded-full bg-gradient-to-r from-marmota-primary to-marmota-secondary text-white shadow-lg"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            className="h-6 w-6"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
+        {/* Botão Flutuante Mobile para Adicionar Falha */}
+        <div className="md:hidden fixed bottom-6 right-6 z-50">
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white p-4 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 cursor-pointer"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-        </button>
-      </div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-6 w-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4v16m8-8H4"
+              />
+            </svg>
+          </button>
+        </div>
 
-      {/* Modal para adicionar falha (Mobile) */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-5 border-b border-gray-100 flex justify-between items-center">
-              <h3 className="font-display font-semibold text-marmota-dark text-lg">
-                Adicionar Falha
-              </h3>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="text-marmota-gray hover:text-marmota-dark"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+        {/* Modal de Adicionar Falha (Mobile) */}
+        {showAddModal && (
+          <div className="md:hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end">
+            <div className="bg-white w-full rounded-t-xl p-6 transform transition-transform duration-300 translate-y-0">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-display font-semibold text-lg text-marmota-dark">
+                  Adicionar Nova Falha
+                </h3>
+                <button
+                  onClick={() => setShowAddModal(false)}
+                  className="text-marmota-gray hover:text-marmota-dark cursor-pointer"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="bg-marmota-light rounded-lg p-3">
-                <label className="text-sm font-medium mb-1.5 block text-marmota-gray">
-                  Tipo:
-                </label>
-                <select
-                  className="w-full bg-white text-sm p-2 outline-none border border-gray-200 rounded-md text-marmota-dark font-medium"
-                  value={tipoFalha}
-                  onChange={(e) => setTipoFalha(e.target.value)}
-                >
-                  <option>Mecânica</option>
-                  <option>Elétrica</option>
-                  <option>Software</option>
-                  <option>Outro</option>
-                </select>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-6 w-6"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
               </div>
-              <div className="bg-marmota-light rounded-lg p-3">
-                <label className="text-sm font-medium mb-1.5 block text-marmota-gray">
-                  Descrição:
-                </label>
-                <textarea
-                  className="w-full h-32 bg-white text-sm outline-none resize-none text-marmota-dark border border-gray-200 rounded-md p-2 font-medium"
-                  placeholder="Insira a descrição..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                ></textarea>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-2">
+                    Tipo de Falha:
+                  </label>
+                  <select
+                    className="w-full bg-white border border-gray-200 rounded-lg p-3 text-marmota-dark outline-none focus:border-marmota-primary"
+                    value={tipoFalha}
+                    onChange={(e) => setTipoFalha(e.target.value)}
+                  >
+                    <option>Mecânica</option>
+                    <option>Elétrica</option>
+                    <option>Software</option>
+                    <option>Outro</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-2">
+                    Descrição:
+                  </label>
+                  <textarea
+                    className="w-full bg-white border border-gray-200 rounded-lg p-3 text-marmota-dark outline-none focus:border-marmota-primary resize-none"
+                    rows={4}
+                    placeholder="Descreva o problema identificado..."
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                  ></textarea>
+                </div>
+
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    onClick={() => setShowAddModal(false)}
+                    className="flex-1 bg-gray-200 text-marmota-gray font-medium py-3 px-4 rounded-lg transition-colors hover:bg-gray-300 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={adicionarFalha}
+                    className="flex-1 bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white font-medium py-3 px-4 rounded-lg transition-all duration-300 cursor-pointer"
+                  >
+                    Adicionar
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={adicionarFalha}
-                className="w-full bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-3 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow"
-              >
-                Adicionar
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Modal de Detalhes da Falha */}
-      {showDetailsModal && selectedFalha && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-lg max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-5 border-b border-gray-100 flex justify-between items-center">
-              <div className="flex items-center">
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${getTipoClass(selectedFalha.tipo)}`}>
-                  {selectedFalha.tipo}
-                </span>
-                <h3 className="font-display font-semibold text-marmota-dark text-lg ml-3">
+        {/* Modal de Detalhes da Falha */}
+        {showDetailsModal && selectedFalha && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-display font-semibold text-lg text-marmota-dark">
                   Detalhes da Falha
                 </h3>
-              </div>
-              <button
-                onClick={() => setShowDetailsModal(false)}
-                className="text-marmota-gray hover:text-marmota-dark"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-6 w-6"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <div className="flex justify-between items-center text-sm text-marmota-gray">
-                <div>ID: #{selectedFalha.id}</div>
-                <div>{selectedFalha.data} • {selectedFalha.hora}</div>
-              </div>
-              
-              <div className="bg-marmota-light rounded-lg p-4">
-                <p className="text-marmota-dark whitespace-pre-wrap">{selectedFalha.descricao}</p>
-              </div>
-              
-              <div className="bg-marmota-light rounded-lg p-4">
-                <label className="text-sm font-medium mb-2 block text-marmota-gray">
-                  Status:
-                </label>
-                <select
-                  className="w-full bg-white text-sm p-2 outline-none border border-gray-200 rounded-md text-marmota-dark font-medium"
-                  value={modalStatus}
-                  onChange={(e) => setModalStatus(e.target.value)}
-                >
-                  <option value="Pendente">Pendente</option>
-                  <option value="Em Andamento">Em Andamento</option>
-                  <option value="Resolvido">Resolvido</option>
-                </select>
-              </div>
-              
-              <div className="flex space-x-3">
-                <button
-                  onClick={updateFalhaStatus}
-                  className="flex-1 bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white text-sm font-medium py-3 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow"
-                >
-                  Atualizar Status
-                </button>
                 <button
                   onClick={() => setShowDetailsModal(false)}
-                  className="flex-1 bg-gray-200 text-marmota-gray hover:bg-gray-300 text-sm font-medium py-3 px-4 rounded-lg transition-all duration-300"
+                  className="text-marmota-gray hover:text-marmota-dark cursor-pointer"
                 >
-                  Fechar
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-6 w-6"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
                 </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-1">
+                    ID:
+                  </label>
+                  <p className="text-marmota-dark font-mono text-sm">
+                    #{selectedFalha.id}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-1">
+                    Tipo:
+                  </label>
+                  <span
+                    className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getTipoClass(
+                      selectedFalha.tipo
+                    )}`}
+                  >
+                    {selectedFalha.tipo}
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-1">
+                    Data e Hora:
+                  </label>
+                  <p className="text-marmota-dark">
+                    {selectedFalha.data} às {selectedFalha.hora}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-1">
+                    Descrição:
+                  </label>
+                  <p className="text-marmota-dark leading-relaxed">
+                    {selectedFalha.descricao}
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-marmota-gray mb-2">
+                    Status:
+                  </label>
+                  <select
+                    className="w-full bg-white border border-gray-200 rounded-lg p-3 text-marmota-dark outline-none focus:border-marmota-primary"
+                    value={modalStatus}
+                    onChange={(e) => setModalStatus(e.target.value)}
+                  >
+                    <option value="Pendente">Pendente</option>
+                    <option value="Em Andamento">Em Andamento</option>
+                    <option value="Resolvido">Resolvido</option>
+                  </select>
+                </div>
+
+                <div className="flex space-x-3 pt-4">
+                  <button
+                    onClick={() => setShowDetailsModal(false)}
+                    className="flex-1 bg-gray-200 text-marmota-gray font-medium py-3 px-4 rounded-lg transition-colors hover:bg-gray-300 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={updateFalhaStatus}
+                    className="flex-1 bg-gradient-to-r from-marmota-primary to-marmota-secondary hover:from-marmota-secondary hover:to-marmota-primary text-white font-medium py-3 px-4 rounded-lg transition-all duration-300 cursor-pointer"
+                  >
+                    Atualizar Status
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-      <footer className="mt-8 py-4 text-center text-sm text-marmota-gray">
-        <div className="max-w-7xl mx-auto px-4">
-          © 2025 Marmota Mobilidade. Todos os direitos reservados.
-        </div>
-      </footer>
+        )}
+      </div>
     </div>
   );
 };

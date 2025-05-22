@@ -1,7 +1,7 @@
 // Arquivo de configuração da aplicação
 
-// URL base da API - altere conforme necessário para desenvolvimento/produção
-export const API_BASE_URL = 'http://localhost:8080';
+// URL base da API
+export const API_BASE_URL = 'https://mmobilidade-api-production.up.railway.app';
 
 // Configurações de autenticação
 export const AUTH_CONFIG = {
@@ -9,7 +9,7 @@ export const AUTH_CONFIG = {
   tokenExpirationTime: 60,
   // Nome do header para envio do token
   tokenHeader: 'Authorization',
-  // Prefixo do token (Bearer, JWT, etc)
+  // Prefixo do token 
   tokenPrefix: 'Bearer',
 };
 

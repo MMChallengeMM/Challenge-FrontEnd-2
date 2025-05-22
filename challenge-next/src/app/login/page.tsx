@@ -60,7 +60,6 @@ export default function LoginPage() {
       <Head>
         <title>Login | Marmota Mobilidade</title>
         <meta name="description" content="Sistema de gestão de mobilidade" />
-        <link rel="icon" href="/favicon.ico" />
       </Head>
 
       {/* Header simplificado */}
