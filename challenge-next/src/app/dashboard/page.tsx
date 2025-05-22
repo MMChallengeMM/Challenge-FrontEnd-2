@@ -49,21 +49,30 @@ const DashboardPage: React.FC = () => {
   // Estado para controle do menu mobile
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
 
+  // Estado para controlar se está usando dados mock
+  const [useMockData, setUseMockData] = useState<boolean>(false);
+
   useEffect(() => {
     // Verificar autenticação
     const token = localStorage.getItem("auth_token");
-    if (!token) {
+    const auth = localStorage.getItem("auth");
+    
+    if (!token || auth !== "true") {
       router.push(routes.login);
       return;
     }
 
-    // Carregar falhas da API
-    carregarFalhas();
+    // Verificar se é um token mock (para desenvolvimento)
+    const isMockToken = token.includes("mock-jwt-token");
+    setUseMockData(isMockToken);
+
+    // Carregar falhas
+    carregarFalhas(isMockToken);
   }, [router]);
 
-  // Função para tratar erros de autenticação
+  // Função para tratar erros de autenticação (modificada para não redirecionar se for mock)
   const handleAuthError = (error: any) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 && !useMockData) {
       localStorage.removeItem("auth_token");
       localStorage.removeItem("user_info");
       localStorage.removeItem("auth");
@@ -79,41 +88,101 @@ const DashboardPage: React.FC = () => {
     router.push(routes.login);
   };
 
-  // Função para carregar todas as falhas da API
-  const carregarFalhas = async () => {
+  // Dados mock para desenvolvimento
+  const getMockFalhas = (): Falha[] => {
+    const mockData: Falha[] = [
+      {
+        id: 1,
+        tipo: "Mecânica",
+        descricao: "Problema no motor do ônibus linha 101",
+        data: new Date().toLocaleDateString('pt-BR'),
+        hora: new Date().toLocaleTimeString('pt-BR'),
+        status: "Pendente",
+        timestamp: Date.now()
+      },
+      {
+        id: 2,
+        tipo: "Elétrica",
+        descricao: "Falha no sistema de ar condicionado",
+        data: new Date(Date.now() - 86400000).toLocaleDateString('pt-BR'), // Ontem
+        hora: new Date(Date.now() - 86400000).toLocaleTimeString('pt-BR'),
+        status: "Em Andamento",
+        timestamp: Date.now() - 86400000
+      },
+      {
+        id: 3,
+        tipo: "Estrutural",
+        descricao: "Rachadura no piso do veículo",
+        data: new Date(Date.now() - 172800000).toLocaleDateString('pt-BR'), // 2 dias atrás
+        hora: new Date(Date.now() - 172800000).toLocaleTimeString('pt-BR'),
+        status: "Resolvido",
+        timestamp: Date.now() - 172800000
+      },
+      {
+        id: 4,
+        tipo: "Software",
+        descricao: "Sistema de GPS não está funcionando",
+        data: new Date(Date.now() - 259200000).toLocaleDateString('pt-BR'), // 3 dias atrás
+        hora: new Date(Date.now() - 259200000).toLocaleTimeString('pt-BR'),
+        status: "Pendente",
+        timestamp: Date.now() - 259200000
+      }
+    ];
+    return mockData;
+  };
+
+  // Função para carregar todas as falhas (API ou Mock)
+  const carregarFalhas = async (isMock: boolean = useMockData) => {
     try {
       setLoading(true);
       setError(null);
       
-      const response = await apiService.getFalhas();
-      
-      // Processar os dados recebidos para o formato esperado pela UI
-      const falhasProcessadas = response.map((falha: any) => {
-        // Convertendo a data para o formato esperado
-        const dataObj = new Date(falha.dataCriacao || falha.created_at || Date.now());
-        return {
-          id: falha.id,
-          tipo: falha.tipo,
-          descricao: falha.descricao,
-          data: dataObj.toLocaleDateString('pt-BR'),
-          hora: dataObj.toLocaleTimeString('pt-BR'),
-          status: falha.status || "Pendente",
-          timestamp: dataObj.getTime()
-        };
-      });
-      
-      setFalhas(falhasProcessadas);
-      setFilteredFalhas(falhasProcessadas);
+      if (isMock) {
+        // Simular delay da API
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const mockFalhas = getMockFalhas();
+        setFalhas(mockFalhas);
+        setFilteredFalhas(mockFalhas);
+      } else {
+        // Usar API real
+        const response = await apiService.getFalhas();
+        
+        // Processar os dados recebidos para o formato esperado pela UI
+        const falhasProcessadas = response.map((falha: any) => {
+          const dataObj = new Date(falha.dataCriacao || falha.created_at || Date.now());
+          return {
+            id: falha.id,
+            tipo: falha.tipo,
+            descricao: falha.descricao,
+            data: dataObj.toLocaleDateString('pt-BR'),
+            hora: dataObj.toLocaleTimeString('pt-BR'),
+            status: falha.status || "Pendente",
+            timestamp: dataObj.getTime()
+          };
+        });
+        
+        setFalhas(falhasProcessadas);
+        setFilteredFalhas(falhasProcessadas);
+      }
     } catch (err: any) {
-      const errorMessage = err.response?.data?.message || err.message || "Erro ao carregar as falhas";
-      setError(errorMessage);
-      handleAuthError(err);
+      console.error("Erro ao carregar falhas:", err);
+      
+      if (isMock) {
+        // Se for mock e der erro, usar dados vazios
+        setFalhas([]);
+        setFilteredFalhas([]);
+        setError("Erro ao carregar dados mock");
+      } else {
+        const errorMessage = err.response?.data?.message || err.message || "Erro ao carregar as falhas";
+        setError(errorMessage);
+        handleAuthError(err);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // Função para adicionar uma nova falha via API
+  // Função para adicionar uma nova falha (API ou Mock)
   const adicionarFalha = async () => {
     if (!description.trim()) {
       alert("Por favor, adicione uma descrição para a falha");
@@ -121,33 +190,55 @@ const DashboardPage: React.FC = () => {
     }
 
     try {
-      const novaFalha: NovaFalha = {
-        tipo: tipoFalha,
-        descricao: description
-      };
+      if (useMockData) {
+        // Simular adição mock
+        const novaFalha: Falha = {
+          id: Date.now(), // ID único baseado no timestamp
+          tipo: tipoFalha,
+          descricao: description,
+          data: new Date().toLocaleDateString('pt-BR'),
+          hora: new Date().toLocaleTimeString('pt-BR'),
+          status: "Pendente",
+          timestamp: Date.now()
+        };
 
-      const response = await apiService.createFalha(novaFalha);
-      
-      // Processar a resposta para o formato esperado na UI
-      const dataObj = new Date(response.dataCriacao || response.created_at || Date.now());
-      const falhaAdicionada: Falha = {
-        id: response.id,
-        tipo: response.tipo,
-        descricao: response.descricao,
-        data: dataObj.toLocaleDateString('pt-BR'),
-        hora: dataObj.toLocaleTimeString('pt-BR'),
-        status: response.status || "Pendente",
-        timestamp: dataObj.getTime()
-      };
+        // Atualizar estado local
+        const novasFalhas = [novaFalha, ...falhas];
+        setFalhas(novasFalhas);
 
-      // Atualizar estado local
-      const novasFalhas = [falhaAdicionada, ...falhas];
-      setFalhas(novasFalhas);
-
-      if (!appliedFilter) {
-        setFilteredFalhas(novasFalhas);
+        if (!appliedFilter) {
+          setFilteredFalhas(novasFalhas);
+        } else {
+          aplicarFiltro(novasFalhas);
+        }
       } else {
-        aplicarFiltro(novasFalhas);
+        // Usar API real
+        const novaFalha: NovaFalha = {
+          tipo: tipoFalha,
+          descricao: description
+        };
+
+        const response = await apiService.createFalha(novaFalha);
+        
+        const dataObj = new Date(response.dataCriacao || response.created_at || Date.now());
+        const falhaAdicionada: Falha = {
+          id: response.id,
+          tipo: response.tipo,
+          descricao: response.descricao,
+          data: dataObj.toLocaleDateString('pt-BR'),
+          hora: dataObj.toLocaleTimeString('pt-BR'),
+          status: response.status || "Pendente",
+          timestamp: dataObj.getTime()
+        };
+
+        const novasFalhas = [falhaAdicionada, ...falhas];
+        setFalhas(novasFalhas);
+
+        if (!appliedFilter) {
+          setFilteredFalhas(novasFalhas);
+        } else {
+          aplicarFiltro(novasFalhas);
+        }
       }
 
       setDescription("");
@@ -156,9 +247,12 @@ const DashboardPage: React.FC = () => {
         setShowAddModal(false);
       }
     } catch (err: any) {
+      console.error("Erro ao adicionar falha:", err);
       const errorMessage = err.response?.data?.message || err.message || "Erro ao adicionar falha";
       alert(errorMessage);
-      handleAuthError(err);
+      if (!useMockData) {
+        handleAuthError(err);
+      }
     }
   };
 
@@ -245,33 +339,47 @@ const DashboardPage: React.FC = () => {
     setShowDetailsModal(true);
   };
 
-  // Atualiza o status da falha via API
+  // Atualiza o status da falha (API ou Mock)
   const updateFalhaStatus = async () => {
     if (selectedFalha) {
       try {
-        // Chamar a API para atualizar o status
-        const updatedFalhaData = await apiService.updateFalha(Number(selectedFalha.id), {
-          status: modalStatus
-        });
+        if (useMockData) {
+          // Simular atualização mock
+          const updatedFalha = { ...selectedFalha, status: modalStatus };
+          const updatedFalhas = falhas.map((f) =>
+            f.id === selectedFalha.id ? updatedFalha : f
+          );
+          
+          setFalhas(updatedFalhas);
+          aplicarFiltro(updatedFalhas);
+          setSelectedFalha(updatedFalha);
+        } else {
+          // Usar API real
+          const updatedFalhaData = await apiService.updateFalha(Number(selectedFalha.id), {
+            status: modalStatus
+          });
 
-        // Atualizar localmente após confirmação da API
-        const updatedFalha = { ...selectedFalha, status: modalStatus };
-        const updatedFalhas = falhas.map((f) =>
-          f.id === selectedFalha.id ? updatedFalha : f
-        );
-        
-        setFalhas(updatedFalhas);
-        aplicarFiltro(updatedFalhas);
-        setSelectedFalha(updatedFalha);
+          const updatedFalha = { ...selectedFalha, status: modalStatus };
+          const updatedFalhas = falhas.map((f) =>
+            f.id === selectedFalha.id ? updatedFalha : f
+          );
+          
+          setFalhas(updatedFalhas);
+          aplicarFiltro(updatedFalhas);
+          setSelectedFalha(updatedFalha);
+        }
         
         // Fechar o modal após sucesso
         setTimeout(() => {
           setShowDetailsModal(false);
         }, 500);
       } catch (err: any) {
+        console.error("Erro ao atualizar status:", err);
         const errorMessage = err.response?.data?.message || err.message || "Erro ao atualizar status";
         alert(errorMessage);
-        handleAuthError(err);
+        if (!useMockData) {
+          handleAuthError(err);
+        }
       }
     }
   };
@@ -279,14 +387,16 @@ const DashboardPage: React.FC = () => {
   // Função para formatar data para exibição
   const formatDateForDisplay = (dateString: string) => {
     if (!dateString) return "";
-
-    // Criar uma nova data com o fuso horário local
     const date = new Date(dateString);
-
-    // Formatar para DD/MM/YYYY (formato brasileiro)
     return date.toLocaleDateString("pt-BR");
   };
 
+  // Debug: Mostrar se está usando dados mock
+  useEffect(() => {
+    if (useMockData) {
+      console.log("🔧 Modo de desenvolvimento ativo - usando dados mock");
+    }
+  }, [useMockData]);
   return (
     <div className="min-h-screen bg-marmota-light font-sans">
       <Head>

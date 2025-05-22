@@ -4,7 +4,6 @@ import { routes } from "@/routes";
 import { useState } from "react";
 import Image from "next/image";
 import Head from "next/head";
-import { apiService } from "@/services/apiService";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,35 +18,43 @@ export default function LoginPage() {
     setError("");
 
     try {
-      // Chamada para a API de autenticação usando Axios
-      const data = await apiService.login(username, password);
       
-      // Armazenar token JWT e informações do usuário
-      localStorage.setItem("auth_token", data.token);
-      localStorage.setItem("user_info", JSON.stringify(data.user));
-      localStorage.setItem("auth", "true");
+      // Verificar credenciais 
+      if (username === "admin" && password === "password") {
+        // Simular dados de usuário autenticado - CORRIGIDO para coincidir com a interface User
+        const mockUserData = {
+          token: "mock-jwt-token-" + Date.now(),
+          user: {
+            id: 1,
+            username: "admin",
+            nome: "Administrador", // ← Corrigido: "nome" em vez de "name"
+            email: "admin@marmota.com",
+            role: "admin",
+            active: true, // ← Adicionado campo obrigatório
+            created_at: new Date().toISOString() // ← Adicionado campo obrigatório
+          }
+        };
+        
+        // Armazenar token JWT e informações do usuário
+        localStorage.setItem("auth_token", mockUserData.token);
+        localStorage.setItem("user_info", JSON.stringify(mockUserData.user));
+        localStorage.setItem("auth", "true");
+        
+        console.log("Login bem-sucedido:", mockUserData); // Para debug
+        
+        // Redirecionar para o dashboard
+        router.push(routes.dashboard);
+      } else {
+        // Credenciais inválidas
+        throw new Error("Credenciais inválidas");
+      }
       
-      router.push(routes.dashboard);
     } catch (error: any) {
-      // Tratamento de erro do Axios
       console.error("Erro na autenticação:", error);
       
-      // Com Axios, os erros HTTP têm uma estrutura específica
-      if (error.response) {
-        // O servidor respondeu com um status de erro
-        const status = error.response.status;
-        if (status === 401) {
-          setError("Credenciais inválidas. Tente novamente.");
-        } else if (status === 403) {
-          setError("Conta bloqueada. Entre em contato com o administrador.");
-        } else {
-          setError(`Erro do servidor: ${error.response.data?.message || 'Tente novamente mais tarde.'}`);
-        }
-      } else if (error.request) {
-        // A requisição foi feita mas não houve resposta
-        setError("Não foi possível conectar ao servidor. Verifique sua conexão.");
+      if (error.message === "Credenciais inválidas") {
+        setError("Credenciais inválidas. Use: admin / password");
       } else {
-        // Erro na configuração da requisição
         setError("Erro ao processar a requisição. Tente novamente.");
       }
     } finally {
@@ -100,6 +107,29 @@ export default function LoginPage() {
               <h2 className="font-display font-semibold text-2xl text-marmota-dark mb-6 text-center">
                 Acesso ao Sistema
               </h2>
+
+              {/* Informações de acesso para desenvolvimento */}
+              <div className="mb-6 p-3 bg-blue-50 border border-blue-100 text-blue-700 rounded-lg text-sm">
+                <div className="flex items-center mb-2">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5 mr-2"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
+                  </svg>
+                  <strong>Acesso de Desenvolvimento</strong>
+                </div>
+                <div>Usuário: <strong>admin</strong></div>
+                <div>Senha: <strong>password</strong></div>
+              </div>
 
               {error && (
                 <div className="mb-6 p-3 bg-red-50 border border-red-100 text-red-600 rounded-lg text-sm">
