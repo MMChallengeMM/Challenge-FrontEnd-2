@@ -767,7 +767,7 @@ const DashboardPage: React.FC = () => {
                     </svg>
                     <p className="font-medium mt-2">{error}</p>
                     <button 
-                      onClick={carregarFalhas}
+                      onClick={() => carregarFalhas()}
                       className="mt-3 px-4 py-2 bg-marmota-primary text-white rounded-lg hover:bg-marmota-secondary transition-colors"
                     >
                       Tentar novamente
